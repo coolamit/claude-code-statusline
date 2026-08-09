@@ -1,9 +1,14 @@
 #!/bin/bash
 # Claude Code statusline
-# Two independent signals:
-#   CTX bar = how full THIS model's window is  (safe <40% | warn 40-60% | crit >60%)
-#   badge   = token milestone, scaled to the window: min(200k, window/2)
-#             -> 200k window: fires at 100k | 1M window: fires at 200k
+# Two independent signals, both bucketed on window size (split at 500k) because
+# context rot is ~absolute -- a big window rots at the same token counts as a
+# small one, so the rot zone is a smaller % of it:
+#   CTX bar = window fill; color band:
+#               <=500k window: safe <40% | warn 40-60% | crit >60%
+#               >500k  window: safe <10% | warn 10-20% | crit >20%
+#   badge   = absolute token milestone:
+#               <=500k window: fires at >100k
+#               >500k  window: fires at >200k
 
 command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 1; }
 
@@ -43,9 +48,13 @@ hash8() {
 ctx_tokens=$(awk -v c="$ctx_cur" -v p="$ctx_pct" -v s="$ctx_size" \
   'BEGIN{ if (c+0 > 0) printf "%.0f", c+0; else if (p+0 > 0) printf "%.0f", (p/100)*s; else printf "0" }')
 
-# Badge threshold scaled to the window: min(200k, window/2).
-#   200k window -> 100k   |   1M window -> 200k
-badge_at=$(awk -v s="$ctx_size" 'BEGIN{ h=s/2; b=200000; printf "%.0f", (h<b?h:b) }')
+# Window-size bucket (split at 500k) drives BOTH the bar color band and the
+# badge milestone, so there's no gap between the 200k and 1M cases. See header.
+if [ "$ctx_size" -le 500000 ] 2>/dev/null; then
+  warn_pct=40; crit_pct=60; badge_at=100000
+else
+  warn_pct=10; crit_pct=20; badge_at=200000
+fi
 badge_txt=$(awk -v t="$badge_at" 'BEGIN{ if (t>=1000000) printf "%gM", t/1000000; else printf "%gk", t/1000 }')
 
 # Colors (per element)
@@ -63,11 +72,12 @@ C_UNDER200K='\033[38;2;0;230;118m'
 C_GIT_BRANCH='\033[38;2;149;191;71m'
 C_MODEL_ID='\033[38;2;120;120;120m'
 
-# Color the CTX bar by how full THIS model's window is (capacity pressure).
+# Color the CTX bar by how full THIS model's window is, using window-bucketed
+# thresholds (warn_pct / crit_pct set above).
 pick_color() {
   local p=$1 safe=$2
-  if [ "$p" -gt 60 ] 2>/dev/null; then printf '%b' "$C_CRIT"
-  elif [ "$p" -ge 40 ] 2>/dev/null; then printf '%b' "$C_WARN"
+  if [ "$p" -gt "$crit_pct" ] 2>/dev/null; then printf '%b' "$C_CRIT"
+  elif [ "$p" -ge "$warn_pct" ] 2>/dev/null; then printf '%b' "$C_WARN"
   else printf '%b' "$safe"
   fi
 }
