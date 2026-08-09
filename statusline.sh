@@ -163,14 +163,14 @@ VS15=$'\xef\xb8\x8e'   # U+FE0E: force text presentation
 printf '%b' "${C_PATH}${cwd}${RST}"
 printf '%b' "$SEP"
 [ -n "$_gb" ] && printf '%b' "${C_GIT_BRANCH}⎇ ${_gb}${RST}"
-printf '%b' "$SEP"
+echo
 if [ -n "$model_id" ]; then
   # Append effort in brackets only when the model reports it: "Fable 5 (xhigh)".
   # Models without an effort level (e.g. Haiku) show the bare name.
   [ -n "$effort" ] && model_id="$model_id ($effort)"
   printf '%b' "${C_MODEL_ID}${model_id}${RST}"
 fi
-echo
+printf '%b' "$SEP"
 if [ -n "$ctx_pct" ]; then
   ci=$(printf '%.0f' "$ctx_pct")
   cc=$(pick_color "$ci" "${C_CTX_BAR}")
@@ -178,7 +178,7 @@ if [ -n "$ctx_pct" ]; then
   make_bar_block "$ci" 10 "$cc"
   printf '%b%%' " ${cc}${ci}"; printf '%b' "${RST}"
 else
-  printf '%b' "${C_DIM}CTX ░░░░░░░░░░ -"; printf '%%'; printf '%b' "${RST}"
+  printf '%b' "${C_DIM}CTX ░░░░░░░░░░ 0"; printf '%%'; printf '%b' "${RST}"
 fi
 printf '%b' "$SEP"
 [ -n "$transcript" ] && printf '%b' "${C_TOKENS}↑$(fmt_tok "$sess_in") ↓$(fmt_tok "$sess_out")${RST}"
