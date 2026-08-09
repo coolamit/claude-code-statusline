@@ -14,6 +14,7 @@ input=$(cat)
 cwd=$(jq -r '.cwd' <<< "$input")
 cwd="${cwd/#$HOME/~}"
 model_id=$(jq -r '.model.display_name // empty' <<< "$input")
+effort=$(jq -r '.effort.level // empty' <<< "$input")
 ctx_pct=$(jq -r '.context_window.used_percentage // empty' <<< "$input")
 ctx_cur=$(jq -r '.context_window.total_input_tokens // empty' <<< "$input")
 ctx_size=$(jq -r '.context_window.context_window_size // 200000' <<< "$input")
@@ -153,7 +154,12 @@ printf '%b' "${C_PATH}${cwd}${RST}"
 printf '%b' "$SEP"
 [ -n "$_gb" ] && printf '%b' "${C_GIT_BRANCH}⎇ ${_gb}${RST}"
 printf '%b' "$SEP"
-[ -n "$model_id" ] && printf '%b' "${C_MODEL_ID}${model_id}${RST}"
+if [ -n "$model_id" ]; then
+  # Append effort in brackets only when the model reports it: "Fable 5 (xhigh)".
+  # Models without an effort level (e.g. Haiku) show the bare name.
+  [ -n "$effort" ] && model_id="$model_id ($effort)"
+  printf '%b' "${C_MODEL_ID}${model_id}${RST}"
+fi
 echo
 if [ -n "$ctx_pct" ]; then
   ci=$(printf '%.0f' "$ctx_pct")
