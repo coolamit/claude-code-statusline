@@ -9,15 +9,29 @@ command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 1; }
 
 input=$(cat)
 
-cwd=$(echo "$input" | jq -r '.cwd')
+# <<< instead of `echo "$input" |` : a herestring avoids forking a subshell
+# for each pipeline, which adds up on a script that runs on every render.
+cwd=$(jq -r '.cwd' <<< "$input")
 cwd="${cwd/#$HOME/~}"
-model_id=$(echo "$input" | jq -r '.model.display_name // empty')
-ctx_pct=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
-ctx_cur=$(echo "$input" | jq -r '.context_window.total_input_tokens // empty')
-ctx_size=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
-transcript=$(echo "$input" | jq -r '.transcript_path // empty')
-cost_usd=$(echo "$input" | jq -r '.cost.total_cost_usd // empty')
-dur_ms=$(echo "$input" | jq -r '.cost.total_duration_ms // empty')
+model_id=$(jq -r '.model.display_name // empty' <<< "$input")
+ctx_pct=$(jq -r '.context_window.used_percentage // empty' <<< "$input")
+ctx_cur=$(jq -r '.context_window.total_input_tokens // empty' <<< "$input")
+ctx_size=$(jq -r '.context_window.context_window_size // 200000' <<< "$input")
+transcript=$(jq -r '.transcript_path // empty' <<< "$input")
+cost_usd=$(jq -r '.cost.total_cost_usd // empty' <<< "$input")
+dur_ms=$(jq -r '.cost.total_duration_ms // empty' <<< "$input")
+
+# 8-char hash of a string, used to key the /tmp caches.
+# NOTE: do NOT write this as `printf | md5sum | cut || fallback` -- the pipeline's
+# exit status is cut's, and cut succeeds even when md5sum is missing, so the ||
+# never fires and the hash comes back EMPTY (every path then shares one cache
+# file). Keeping md5sum last in its pipeline makes its failure the one that counts.
+hash8() {
+  local s=$1 h=""
+  h=$(printf '%s' "$s" | md5sum 2>/dev/null) || h=$(md5 -q -s "$s" 2>/dev/null) || h=""
+  h=${h%% *}                       # md5sum appends "  -"
+  [ -n "$h" ] && printf '%.8s' "$h" || printf 'stable'
+}
 
 # Current context fill in tokens.
 # Prefer total_input_tokens: it IS the current window fill (input +
@@ -93,7 +107,7 @@ fmt_cost() {
 }
 
 # Git (cached 5s)
-_gc="/tmp/sl-git-$(echo "$PWD" | md5sum 2>/dev/null | cut -c1-8 || md5 -q -s "$PWD" 2>/dev/null | cut -c1-8 || echo stable)"
+_gc="/tmp/sl-git-$(hash8 "$PWD")"
 _ga=999
 [ -f "$_gc" ] && _ga=$(( $(date +%s) - $(stat -f%m "$_gc" 2>/dev/null || stat -c%Y "$_gc" 2>/dev/null || echo 0) ))
 if [ "$_ga" -gt 5 ]; then
@@ -102,7 +116,9 @@ if [ "$_ga" -gt 5 ]; then
   _gm=$(git diff --numstat 2>/dev/null | wc -l | tr -d ' ')
   printf '%s\n' "${_gb}|${_gs}|${_gm}" > "$_gc"
 else
-  _oldIFS=$IFS; IFS='|' read -r _gb _gs _gm < "$_gc"; IFS=$_oldIFS
+  # `IFS=... read` is a prefix assignment to a *regular* builtin, so it does not
+  # persist -- no save/restore needed.
+  IFS='|' read -r _gb _gs _gm < "$_gc"
 fi
 
 # Cumulative session token usage, summed from the transcript JSONL.
@@ -111,9 +127,10 @@ fi
 # so the full scan runs once per turn, not on every redraw.
 sess_in=0; sess_out=0; sess_cache=0
 if [ -n "$transcript" ] && [ -f "$transcript" ]; then
-  _tc="/tmp/sl-tok-$(echo "$transcript" | md5sum 2>/dev/null | cut -c1-8 || md5 -q -s "$transcript" 2>/dev/null | cut -c1-8 || echo stable)"
+  _tc="/tmp/sl-tok-$(hash8 "$transcript")"
   _sig=$(stat -f%m "$transcript" 2>/dev/null || stat -c%Y "$transcript" 2>/dev/null || echo 0)
-  IFS='|' read -r _csig sess_in sess_out sess_cache <<< "$([ -f "$_tc" ] && cat "$_tc")"
+  _csig=""
+  [ -f "$_tc" ] && IFS='|' read -r _csig sess_in sess_out sess_cache < "$_tc"
   if [ "$_csig" != "$_sig" ]; then
     # jq emits per-turn counts (small -> always clean integers); awk does the big
     # summing and prints clean integers. This sidesteps jq's scientific-notation
@@ -123,9 +140,9 @@ if [ -n "$transcript" ] && [ -f "$transcript" ]; then
       jq -r 'select(type=="object") | .message.usage // empty
              | "\(.input_tokens // 0) \(.output_tokens // 0) \(.cache_read_input_tokens // 0) \(.cache_creation_input_tokens // 0)"' "$transcript" 2>/dev/null \
       | awk '{i+=$1; o+=$2; c+=$3+$4} END{printf "%.0f %.0f %.0f", i+c, o, c}')
-    : "${sess_in:=0}"; : "${sess_out:=0}"; : "${sess_cache:=0}"
-    printf '%s|%s|%s|%s\n' "$_sig" "$sess_in" "$sess_out" "$sess_cache" > "$_tc"
+    printf '%s|%s|%s|%s\n' "$_sig" "${sess_in:-0}" "${sess_out:-0}" "${sess_cache:-0}" > "$_tc"
   fi
+  : "${sess_in:=0}"; : "${sess_out:=0}"; : "${sess_cache:=0}"
 fi
 
 SEP=' | '
